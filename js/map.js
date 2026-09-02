@@ -3,8 +3,6 @@
   const M = window.MCAP, C = M.C;
   const NS = "http://www.w3.org/2000/svg";
 
-  const LABELS = ["Philadelphia", "Allegheny", "Erie", "Dauphin", "Northampton", "Lancaster",
-                  "Luzerne", "Centre", "Bucks", "Westmoreland", "York", "Berks"];
   // Small hand-tuned nudges (dx, dy in map units) so labels don't collide
   // with neighboring county names or run outside a narrow county's outline.
   const LABEL_OFFSET = {
@@ -50,7 +48,8 @@
 
   function build(svg, data, onSelect) {
     const [W, H] = data.meta.view;
-    svg.setAttribute("viewBox", `-6 -6 ${W + 12} ${H + 12}`);
+    const base = { x: -6, y: -6, w: W + 12, h: H + 12 };
+    svg.setAttribute("viewBox", `${base.x} ${base.y} ${base.w} ${base.h}`);
 
     const defs = document.createElementNS(NS, "defs");
     defs.innerHTML = `<filter id="mapShadow" x="-20%" y="-20%" width="140%" height="140%">
@@ -61,6 +60,7 @@
     const g = document.createElementNS(NS, "g");
     g.setAttribute("filter", "url(#mapShadow)");
     const paths = {};
+    let dragged = false;
     data.counties.forEach(c => {
       const p = document.createElementNS(NS, "path");
       p.setAttribute("d", c.path);
@@ -69,7 +69,7 @@
       p.setAttribute("role", "button");
       p.setAttribute("aria-label", c.name + " County");
       p.dataset.n = c.name;
-      p.addEventListener("click", () => onSelect(c.name));
+      p.addEventListener("click", () => { if (!dragged) onSelect(c.name); });
       p.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(c.name); } });
       p.addEventListener("mouseenter", () => spotlight(c.name));
       p.addEventListener("mouseleave", clearSpotlight);
@@ -79,23 +79,128 @@
     svg.appendChild(g);
 
     function spotlight(name) {
-      Object.entries(paths).forEach(([n, p]) => p.classList.toggle("dim", n !== name));
-      paths[name].classList.add("hot");
+      const selName = Object.keys(paths).find(n => paths[n].classList.contains("sel"));
+      Object.entries(paths).forEach(([n, p]) => {
+        const crisp = n === name || n === selName;
+        p.classList.toggle("faded", !crisp);
+        p.classList.toggle("hot", n === name);
+      });
     }
     function clearSpotlight() {
-      Object.values(paths).forEach(p => { p.classList.remove("dim"); p.classList.remove("hot"); });
+      const selName = Object.keys(paths).find(n => paths[n].classList.contains("sel"));
+      Object.entries(paths).forEach(([n, p]) => {
+        p.classList.remove("hot");
+        p.classList.toggle("faded", !!selName && n !== selName);
+      });
     }
+    // Called by app.js right after it adds/removes the .sel class, so the
+    // rest of the map blurs behind the selected county even without a hover.
+    function refreshSelection() { clearSpotlight(); }
 
+    // Every county gets a label, sized to its footprint. At the statewide
+    // view small counties render too small to read (by design, to avoid
+    // clutter); zooming in enlarges them along with everything else, so
+    // detail appears exactly where the person has zoomed to look for it.
     const lg = document.createElementNS(NS, "g");
-    data.counties.filter(c => LABELS.includes(c.name)).forEach(c => {
+    lg.setAttribute("class", "labels");
+    data.counties.forEach(c => {
+      const bb = paths[c.name].getBBox();
+      const size = Math.max(4.5, Math.min(15, Math.sqrt(bb.width * bb.height) / 9));
       const [ox, oy] = LABEL_OFFSET[c.name] || [0, 0];
       const t = document.createElementNS(NS, "text");
       t.setAttribute("x", c.cx + ox); t.setAttribute("y", c.cy + oy); t.setAttribute("class", "lbl");
+      t.setAttribute("font-size", size.toFixed(1));
+      t.setAttribute("stroke-width", (size * 0.22).toFixed(2));
       t.textContent = c.name;
       lg.appendChild(t);
     });
     svg.appendChild(lg);
-    return { paths, group: g };
+
+    // ---- zoom / pan --------------------------------------------------
+    const MAXZ = 10;
+    let vb = { ...base };
+    function apply() { svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); }
+    function clampView() {
+      vb.w = Math.min(base.w, Math.max(base.w / MAXZ, vb.w));
+      vb.h = Math.min(base.h, Math.max(base.h / MAXZ, vb.h));
+      const padX = vb.w * 0.9, padY = vb.h * 0.9;
+      vb.x = Math.min(base.x + base.w - vb.w + padX, Math.max(base.x - padX, vb.x));
+      vb.y = Math.min(base.y + base.h - vb.h + padY, Math.max(base.y - padY, vb.y));
+    }
+    function toSvg(clientX, clientY) {
+      const pt = svg.createSVGPoint();
+      pt.x = clientX; pt.y = clientY;
+      return pt.matrixTransform(svg.getScreenCTM().inverse());
+    }
+    function zoomBy(factor, clientX, clientY) {
+      const p = clientX != null ? toSvg(clientX, clientY) : { x: vb.x + vb.w / 2, y: vb.y + vb.h / 2 };
+      const nw = vb.w / factor, nh = vb.h / factor;
+      vb.x = p.x - (p.x - vb.x) * (nw / vb.w);
+      vb.y = p.y - (p.y - vb.y) * (nh / vb.h);
+      vb.w = nw; vb.h = nh;
+      clampView(); apply();
+    }
+    function reset() { vb = { ...base }; apply(); }
+    svg.addEventListener("wheel", e => {
+      e.preventDefault();
+      zoomBy(e.deltaY < 0 ? 1.18 : 1 / 1.18, e.clientX, e.clientY);
+    }, { passive: false });
+
+    let dragging = false, last = null, moved = 0;
+    svg.addEventListener("pointerdown", e => {
+      if (e.button !== undefined && e.button !== 0) return;
+      if (e.pointerType === "touch") return; // touch is handled by the pinch/pan block below
+      dragging = true; moved = 0; last = { x: e.clientX, y: e.clientY };
+      const onMove = e2 => {
+        if (!dragging) return;
+        const s = vb.w / svg.clientWidth;
+        const dx = (e2.clientX - last.x) * s, dy = (e2.clientY - last.y) * s;
+        moved += Math.abs(e2.clientX - last.x) + Math.abs(e2.clientY - last.y);
+        vb.x -= dx; vb.y -= dy;
+        last = { x: e2.clientX, y: e2.clientY };
+        clampView(); apply();
+      };
+      const onUp = () => {
+        if (moved > 4) { dragged = true; setTimeout(() => { dragged = false; }, 0); }
+        dragging = false;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
+
+    // Two-finger pinch and one-finger pan on touch (kept separate from the
+    // mouse path above since touch shouldn't fight page scroll on one finger).
+    const touches = new Map();
+    let touchLast = null;
+    svg.addEventListener("pointerdown", e => {
+      if (e.pointerType !== "touch") return;
+      touches.set(e.pointerId, e);
+      if (touches.size === 1) touchLast = { x: e.clientX, y: e.clientY };
+    });
+    svg.addEventListener("pointermove", e => {
+      if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
+      const prev = touches.get(e.pointerId);
+      touches.set(e.pointerId, e);
+      if (touches.size === 2) {
+        const [a, b] = [...touches.values()];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        if (prev._dist) zoomBy(dist / prev._dist, (a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2);
+        touches.get(e.pointerId)._dist = dist;
+        if (a.pointerId !== e.pointerId) a._dist = dist; else b._dist = dist;
+      } else if (touches.size === 1 && touchLast) {
+        const s = vb.w / svg.clientWidth;
+        vb.x -= (e.clientX - touchLast.x) * s; vb.y -= (e.clientY - touchLast.y) * s;
+        touchLast = { x: e.clientX, y: e.clientY };
+        clampView(); apply();
+      }
+    });
+    ["pointerup", "pointercancel"].forEach(ev => svg.addEventListener(ev, e => {
+      touches.delete(e.pointerId); touchLast = null;
+    }));
+
+    return { paths, group: g, refreshSelection, zoom: { in: (x, y) => zoomBy(1.5, x, y), out: (x, y) => zoomBy(1 / 1.5, x, y), reset } };
   }
 
   function legendHtml(spec, counts) {

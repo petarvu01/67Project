@@ -13,7 +13,11 @@
   const state = { metric: "projmarg", county: null };
 
   // ---------------------------------------------------------- map
-  const { paths } = M.map.build(svg, data, name => state.county === name ? clear() : select(name));
+  const { paths, zoom, refreshSelection } = M.map.build(svg, data, name => state.county === name ? clear() : select(name));
+
+  $("zoomIn").addEventListener("click", () => zoom.in());
+  $("zoomOut").addEventListener("click", () => zoom.out());
+  $("zoomReset").addEventListener("click", () => zoom.reset());
 
   function paint() {
     const spec = specs[state.metric];
@@ -70,6 +74,7 @@
     const p = paths[name];
     p.classList.add("sel");
     p.parentNode.appendChild(p);              // draw selected outline on top
+    refreshSelection();
     dash.innerHTML = M.panels.dashboard(byName[name], data);
     positionEduLegend();
     document.title = `${name} County — Pennsylvania county outlook`;
@@ -79,6 +84,7 @@
   function clear() {
     state.county = null;
     Object.values(paths).forEach(p => p.classList.remove("sel"));
+    refreshSelection();
     dash.innerHTML = M.panels.statewide(data);
     document.title = "Pennsylvania county outlook — MCAP";
     writeHash();
