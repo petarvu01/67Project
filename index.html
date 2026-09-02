@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pennsylvania county outlook — MCAP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="top">
+  <h1 class="cond">Pennsylvania county outlook <small>MCAP 2028</small></h1>
+  <span class="demo" id="demoChip" hidden>Demo data</span>
+  <nav class="tabs" id="tabs" aria-label="Map metric"></nav>
+  <label class="search">
+    <span class="sr">Find a county</span>
+    <input id="search" list="countyList" placeholder="Find a county…" autocomplete="off">
+    <datalist id="countyList"></datalist>
+  </label>
+</header>
+
+<main>
+  <section class="mapwrap" aria-label="County map">
+    <div class="maphead">
+      <div>
+        <h2 id="mapTitle"></h2>
+        <p id="mapSub">Hover for the number, click a county to open its dashboard.</p>
+      </div>
+      <button class="btn" id="mapPng" type="button">Download map</button>
+    </div>
+    <svg class="map" id="map" role="img" aria-label="Pennsylvania counties"></svg>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="dash" id="dash" aria-live="polite"></section>
+</main>
+
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script src="data/mcap_data.js"></script>
+<script src="js/colors.js"></script>
+<script src="js/panels.js"></script>
+<script src="js/map.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
