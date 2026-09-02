@@ -13,7 +13,7 @@
   const state = { metric: "projmarg", county: null };
 
   // ---------------------------------------------------------- map
-  const { paths } = M.map.build(svg, data, select);
+  const { paths } = M.map.build(svg, data, name => state.county === name ? clear() : select(name));
 
   function paint() {
     const spec = specs[state.metric];
@@ -89,6 +89,7 @@
     if (!b) return;
     if (b.dataset.county) select(b.dataset.county);
     if (b.dataset.act === "print") window.print();
+    if (b.dataset.act === "clear") clear();
   });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && state.county) clear(); });
 

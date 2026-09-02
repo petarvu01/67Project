@@ -158,12 +158,14 @@ ${ticks}${zero}
 
   // ---------------------------------------------------------- header + composition
   function header(c, r, kind) {
-    return `<div class="dhead" style="--kind:${M.kindColor(kind)}">
+    return `<div class="dhead-block">
+<button class="btn back" type="button" data-act="clear" aria-label="Back to statewide view">&larr; All counties</button>
+<div class="dhead" style="--kind:${M.kindColor(kind)}">
 <h2 class="cond">${M.esc(c.name)} County</h2>
 <div class="meta">FIPS ${c.fips}, PennDOT ${c.penndot}</div>
 <div class="kind">${kind} county</div>
 <button class="btn" type="button" data-act="print">Print dashboard</button>
-</div>`;
+</div></div>`;
   }
 
   function topRow(r) {
