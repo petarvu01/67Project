@@ -1,23 +1,33 @@
 """
 Build data/mcap_data.js for the MCAP Pennsylvania site.
 
-    python tools/build_data.py                      # uses tools/demo_input/*.csv
-    python tools/build_data.py --input path/to/dir  # real data (csv or xlsx)
-    python tools/build_data.py --input data.xlsx    # one workbook, three sheets
-    python tools/build_data.py --flip-sign          # if the source uses +R / -D
+    python tools/build_data.py                        # uses tools/demo_input/*.csv
+    python tools/build_data.py --input master.xlsx     # the MCAP master workbook
+    python tools/build_data.py --input path/to/dir     # three plain CSVs instead
+    python tools/build_data.py --flip-sign             # source uses +R / -D
 
-Input: three tables, as CSV files or sheets in one workbook, named
-    county_metrics      one row per county
-    education_series    one row per county-year (2012-2028)
-    historic_margins    one row per county-cycle (2012-2024)
+Two input shapes are supported:
 
-Column definitions are in README.md. Column matching is case-insensitive and
-ignores spaces/underscores, so "Cnty Edu %" and "cnty_edu_pct" both work.
+1. The MCAP master workbook (sheets: Master, Enthusiasm, Registration,
+   VulComposite, Historic Margins, ...). Detected automatically when the
+   input file has a sheet named "Master". Cycle 2028 in the Master sheet is
+   read as the current snapshot (LOGPWD, ELASTICITY, MACROTIDE, BASEMARG,
+   PROJMARG); all cycles feed the education line. Margins, education shares
+   and the national-mood impact are stored as fractions in the workbook
+   (e.g. -0.27) and are multiplied by 100 here to display as points/percent.
+   The vulnerability composite (CEVS) is a z-score, not 0-100, and the
+   anxiety tier is whatever label the sheet assigns (11 distinct labels
+   appear in the source) - both are shown as given.
 
-The tool validates that all 67 counties are present, values are inside their
-scales, and every year is covered, then writes a single JS file that the page
-loads with a <script> tag. That keeps the site working both on GitHub Pages
-and when index.html is opened straight from disk.
+2. Three plain tables (CSV files in a folder, or three sheets in a workbook
+   with no "Master" sheet), named county_metrics / education_series /
+   historic_margins. This is the simpler shape documented in README.md,
+   useful for hand-built or partial data.
+
+Either way the tool validates that all 67 counties are present and every
+county has the same set of cycles, then writes a single JS file the page
+loads with a <script> tag - so the site works on GitHub Pages and opened
+straight from disk.
 """
 
 import argparse, json, math, os, re, sys
@@ -137,6 +147,91 @@ def project_paths():
     return counties, W, H
 
 
+# --------------------------------------------------------------- master workbook
+def is_master_workbook(path):
+    if not (os.path.isfile(path) and path.lower().endswith((".xlsx", ".xlsm"))):
+        return False
+    try:
+        return "Master" in pd.ExcelFile(path).sheet_names
+    except Exception:
+        return False
+
+
+def clean_names(df):
+    """Find the county-name column regardless of case, rename it to 'County'."""
+    col = next(c for c in df.columns if norm(c) == "county")
+    if col != "County":
+        df = df.rename(columns={col: "County"})
+    df = df[df["County"].notna()].copy()
+    df["County"] = df["County"].astype(str).str.strip()
+    return df[df["County"].str.len() > 0]
+
+
+def build_from_master_workbook(path, names, flip):
+    sign = -1.0 if flip else 1.0
+    xl = pd.ExcelFile(path)
+    master = clean_names(xl.parse("Master"))
+    hist = clean_names(xl.parse("Historic Margins"))
+    enth = clean_names(xl.parse("Enthusiasm"))
+    reg = clean_names(xl.parse("Registration"))
+    vul = clean_names(xl.parse("VulComposite"))
+
+    cycles = sorted(master["CYCLE"].unique())
+    last_cycle, last_actual = cycles[-1], cycles[-2]  # 2028 snapshot, 2024 last actual
+    snap = master[master["CYCLE"] == last_cycle].set_index("County")
+
+    problems = []
+    for label, df in (("Master", master), ("Historic Margins", hist),
+                      ("Enthusiasm", enth), ("Registration", reg), ("VulComposite", vul)):
+        have = set(df["County"])
+        missing, extra = sorted(set(names) - have), sorted(have - set(names))
+        if missing:
+            problems.append(f"{label}: no rows for {', '.join(missing)}")
+        if extra:
+            problems.append(f"{label}: unknown counties {', '.join(extra)}")
+    if problems:
+        print("Validation failed:\n  - " + "\n  - ".join(problems))
+        sys.exit(1)
+
+    reg_i = reg.set_index("County")
+    enth_i = enth.set_index("County")
+    vul_i = vul.set_index("County")
+
+    metrics = {}
+    for name in names:
+        s, r, e, v = snap.loc[name], reg_i.loc[name], enth_i.loc[name], vul_i.loc[name]
+        metrics[name] = {
+            "logpwd": round(float(s["LOGPWD"]), 2),
+            "elasticity": round(float(s["ELASTICITY"]), 2),
+            "macrotide": round(float(s["MACROTIDE"]) * 100 * sign, 2),
+            "basemarg": round(float(s["BASEMARG"]) * 100 * sign, 1),
+            "projmarg": round(float(s["PROJMARG"]) * 100 * sign, 1),
+            "vulcomposite": round(float(v["Composite Economic Score (CEVS)"]), 2),
+            "anxiety_tier": str(v["Local Anxiety Risk Tier"]).strip(),
+            "turnout_d_2024": round(float(e["2024 Dem Turnout %"]) * 100, 1),
+            "turnout_r_2024": round(float(e["2024 Rep Turnout %"]) * 100, 1),
+            "turnout_d_2026": round(float(e["2026 Dem Turnout %"]) * 100, 1),
+            "turnout_r_2026": round(float(e["2026 Rep Turnout %"]) * 100, 1),
+            "reg_net_d": int(round(float(r["Net Dem Change"]))),
+            "reg_net_r": int(round(float(r["Net Rep Change"]))),
+            "reg_net_i": int(round(float(r["Net Independent/Other Change"]))),
+        }
+
+    edu_out = {}
+    for name, g in master.groupby("County"):
+        g = g.sort_values("CYCLE")
+        edu_out[name] = [[int(c), round(float(ce) * 100, 1), round(float(se) * 100, 1)]
+                         for c, ce, se in g[["CYCLE", "CNTYEDU%", "STEDU%"]].values]
+
+    his_out = {}
+    for name, g in hist.groupby("County"):
+        g = g.sort_values("Cycle")
+        his_out[name] = [[int(c), round(float(m) * 100 * sign, 1)]
+                         for c, m in g[["Cycle", "Margin"]].values]
+
+    return metrics, edu_out, his_out, int(last_actual)
+
+
 # --------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
@@ -151,71 +246,69 @@ def main():
     names = [c["name"] for c in counties]
     is_demo = args.demo or os.path.abspath(args.input) == os.path.join(HERE, "demo_input")
 
-    met = pick(read_table(args.input, "county_metrics"), METRIC_COLS, "county_metrics")
-    edu = pick(read_table(args.input, "education_series"), EDU_COLS, "education_series")
-    his = pick(read_table(args.input, "historic_margins"), HIST_COLS, "historic_margins")
+    if is_master_workbook(args.input):
+        metrics, edu_out, his_out, edu_last_actual = build_from_master_workbook(
+            args.input, names, args.flip_sign)
+    else:
+        met = pick(read_table(args.input, "county_metrics"), METRIC_COLS, "county_metrics")
+        edu = pick(read_table(args.input, "education_series"), EDU_COLS, "education_series")
+        his = pick(read_table(args.input, "historic_margins"), HIST_COLS, "historic_margins")
 
-    for df in (met, edu, his):
-        df["county"] = df["county"].astype(str).str.strip().str.replace(r"\s+County$", "", regex=True)
+        for df in (met, edu, his):
+            df["county"] = df["county"].astype(str).str.strip().str.replace(r"\s+County$", "", regex=True)
 
-    problems = []
-    # counties present
-    for label, df in (("county_metrics", met), ("education_series", edu), ("historic_margins", his)):
-        missing = sorted(set(names) - set(df["county"]))
-        extra = sorted(set(df["county"]) - set(names))
-        if missing:
-            problems.append(f"{label}: no rows for {', '.join(missing)}")
-        if extra:
-            problems.append(f"{label}: unknown counties {', '.join(extra)} (check spelling)")
-    if met["county"].duplicated().any():
-        problems.append("county_metrics: duplicate county rows")
+        problems = []
+        for label, df in (("county_metrics", met), ("education_series", edu), ("historic_margins", his)):
+            missing = sorted(set(names) - set(df["county"]))
+            extra = sorted(set(df["county"]) - set(names))
+            if missing:
+                problems.append(f"{label}: no rows for {', '.join(missing)}")
+            if extra:
+                problems.append(f"{label}: unknown counties {', '.join(extra)} (check spelling)")
+        if met["county"].duplicated().any():
+            problems.append("county_metrics: duplicate county rows")
 
-    # ranges
-    for col, (lo, hi) in RANGES.items():
-        bad = met[(met[col] < lo) | (met[col] > hi)]
-        if not bad.empty:
-            problems.append(f"county_metrics.{col}: outside {lo}..{hi} for {', '.join(bad['county'])}")
-    met["anxiety_tier"] = met["anxiety_tier"].astype(str).str.strip().str.title()
-    bad = met[~met["anxiety_tier"].isin(TIERS)]
-    if not bad.empty:
-        problems.append(f"anxiety_tier must be one of {TIERS}; got "
-                        f"{sorted(bad['anxiety_tier'].unique())}")
+        for col, (lo, hi) in RANGES.items():
+            bad = met[(met[col] < lo) | (met[col] > hi)]
+            if not bad.empty:
+                problems.append(f"county_metrics.{col}: outside {lo}..{hi} for {', '.join(bad['county'])}")
+        met["anxiety_tier"] = met["anxiety_tier"].astype(str).str.strip().str.title()
 
-    # year coverage
-    for label, df, years in (("education_series", edu, EDU_YEARS), ("historic_margins", his, HIST_YEARS)):
-        cov = df.groupby("county")["year"].apply(lambda s: sorted(set(int(y) for y in s)))
-        short = [c for c, ys in cov.items() if any(y not in ys for y in years)]
-        if short:
-            problems.append(f"{label}: incomplete years ({years[0]}-{years[-1]}) for "
-                            f"{', '.join(short[:8])}{'…' if len(short) > 8 else ''}")
+        for label, df, years in (("education_series", edu, EDU_YEARS), ("historic_margins", his, HIST_YEARS)):
+            cov = df.groupby("county")["year"].apply(lambda s: sorted(set(int(y) for y in s)))
+            short = [c for c, ys in cov.items() if any(y not in ys for y in years)]
+            if short:
+                problems.append(f"{label}: incomplete years ({years[0]}-{years[-1]}) for "
+                                f"{', '.join(short[:8])}{'…' if len(short) > 8 else ''}")
 
-    if problems:
-        print("Validation failed:\n  - " + "\n  - ".join(problems))
-        sys.exit(1)
+        if problems:
+            print("Validation failed:\n  - " + "\n  - ".join(problems))
+            sys.exit(1)
 
-    sign = -1.0 if args.flip_sign else 1.0
-    for col in ("basemarg", "projmarg"):
-        met[col] = met[col].astype(float) * sign
-    his["margin"] = his["margin"].astype(float) * sign
+        sign = -1.0 if args.flip_sign else 1.0
+        for col in ("basemarg", "projmarg"):
+            met[col] = met[col].astype(float) * sign
+        his["margin"] = his["margin"].astype(float) * sign
 
-    metrics = {}
-    for r in met.to_dict("records"):
-        metrics[r["county"]] = {k: (round(float(v), 2) if isinstance(v, (int, float)) and not isinstance(v, bool)
-                                    else v) for k, v in r.items() if k != "county"}
-        for k in ("reg_net_d", "reg_net_r", "reg_net_i"):
-            metrics[r["county"]][k] = int(round(float(r[k])))
+        metrics = {}
+        for r in met.to_dict("records"):
+            metrics[r["county"]] = {k: (round(float(v), 2) if isinstance(v, (int, float)) and not isinstance(v, bool)
+                                        else v) for k, v in r.items() if k != "county"}
+            for k in ("reg_net_d", "reg_net_r", "reg_net_i"):
+                metrics[r["county"]][k] = int(round(float(r[k])))
 
-    edu_out = {c: [[int(y), round(float(cp), 1), round(float(sp), 1)]
-                   for y, cp, sp in g.sort_values("year")[["year", "cnty_edu_pct", "st_edu_pct"]].values
-                   if int(y) in EDU_YEARS]
-               for c, g in edu.groupby("county")}
-    his_out = {c: [[int(y), round(float(m), 1)]
-                   for y, m in g.sort_values("year")[["year", "margin"]].values if int(y) in HIST_YEARS]
-               for c, g in his.groupby("county")}
+        edu_out = {c: [[int(y), round(float(cp), 1), round(float(sp), 1)]
+                       for y, cp, sp in g.sort_values("year")[["year", "cnty_edu_pct", "st_edu_pct"]].values
+                       if int(y) in EDU_YEARS]
+                   for c, g in edu.groupby("county")}
+        his_out = {c: [[int(y), round(float(m), 1)]
+                       for y, m in g.sort_values("year")[["year", "margin"]].values if int(y) in HIST_YEARS]
+                   for c, g in his.groupby("county")}
+        edu_last_actual = 2024
 
     payload = {
         "meta": {"built": date.today().isoformat(), "demo": bool(is_demo),
-                 "view": [W, H], "edu_last_actual": 2024, "purple_band": 5.0},
+                 "view": [W, H], "edu_last_actual": edu_last_actual, "purple_band": 5.0},
         "counties": counties,
         "metrics": metrics,
         "education": edu_out,

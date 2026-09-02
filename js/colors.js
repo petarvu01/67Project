@@ -44,6 +44,10 @@
       return `+${Math.abs(v).toFixed(d)} ${v > 0 ? "D" : "R"}`;
     },
     marginColor(v) { return Math.abs(v) < PURPLE_BAND ? C.pur : v > 0 ? C.dem : C.rep; },
+    // Vulnerability composite (CEVS) is a z-score: negative = insulated,
+    // positive = vulnerable. Color is continuous, independent of the tier label text.
+    vulnColor: ramp([[0, "#2E7D74"], [0.5, "#C9A227"], [1, "#B0202F"]]),
+    vulnColorFor(z) { return this.vulnColor(Math.min(1, Math.max(0, (z + 2.5) / 5))); },
     classify(v) { return Math.abs(v) < PURPLE_BAND ? "Purple" : v > 0 ? "Blue" : "Red"; },
     kindColor(k) { return { Blue: C.dem, Red: C.rep, Purple: C.pur }[k]; },
     swingText(base, proj) {

@@ -71,6 +71,7 @@
     p.classList.add("sel");
     p.parentNode.appendChild(p);              // draw selected outline on top
     dash.innerHTML = M.panels.dashboard(byName[name], data);
+    positionEduLegend();
     document.title = `${name} County — Pennsylvania county outlook`;
     writeHash();
     if (window.innerWidth <= 1100) dash.scrollIntoView({ block: "start" });
@@ -94,6 +95,18 @@
   $("mapPng").addEventListener("click", () => {
     M.map.downloadPng(svg, `pa_${state.metric}${state.county ? "_" + state.county : ""}.png`);
   });
+
+  // Legend label 2 follows label 1's rendered width, so it never overlaps
+  // regardless of county name length (measured, not estimated).
+  function positionEduLegend() {
+    dash.querySelectorAll('svg.chart').forEach(svg => {
+      const t1 = svg.querySelector('#lbl1'), l2 = svg.querySelector('#lbl2line'), t2 = svg.querySelector('#lbl2');
+      if (!t1 || !l2 || !t2) return;
+      const x = t1.getBBox().x + t1.getBBox().width + 14;
+      l2.setAttribute('x1', x); l2.setAttribute('x2', x + 18);
+      t2.setAttribute('x', x + 24);
+    });
+  }
 
   // ---------------------------------------------------------- URL hash
   function writeHash() {

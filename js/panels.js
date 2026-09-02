@@ -50,16 +50,19 @@ ${ticks}${zero}
     const band = y1 > lastActual
       ? `<rect x="${X(lastActual).toFixed(1)}" y="${T}" width="${(X(y1) - X(lastActual)).toFixed(1)}" height="${H - T - B}" fill="#EEF1F5"/><text x="${(X(lastActual) + 5).toFixed(1)}" y="${H - B - 6}" class="tk">projected</text>` : "";
     const cl = c[c.length - 1], sl = s[s.length - 1];
+    const close = Math.abs(Y(cl) - Y(sl)) < 11;
+    const clY = close && cl >= sl ? Y(cl) - 5 : Y(cl);
+    const slY = close && sl > cl ? Y(sl) + 5 : Y(sl);
     return `<div class="panel"><h3>Education attainment</h3><p>Bachelor's degree or higher, county vs state, ${y0}–${y1}</p>
 <svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Education line chart">${band}${grid}${xt}
 <polyline points="${poly(s, act)}" fill="none" stroke="${C.muted}" stroke-width="2"/>
 <polyline points="${poly(s, prj)}" fill="none" stroke="${C.muted}" stroke-width="2" stroke-dasharray="5 4"/>
 <polyline points="${poly(c, act)}" fill="none" stroke="${C.teal}" stroke-width="2.6"/>
 <polyline points="${poly(c, prj)}" fill="none" stroke="${C.teal}" stroke-width="2.6" stroke-dasharray="5 4"/>
-<circle cx="${X(y1).toFixed(1)}" cy="${Y(cl).toFixed(1)}" r="3.5" fill="${C.teal}"/><text x="${(X(y1) + 7).toFixed(1)}" y="${(Y(cl) + 4).toFixed(1)}" class="tv2" fill="${C.teal}">${Math.round(cl)}%</text>
-<circle cx="${X(y1).toFixed(1)}" cy="${Y(sl).toFixed(1)}" r="3.5" fill="${C.muted}"/><text x="${(X(y1) + 7).toFixed(1)}" y="${(Y(sl) + 4).toFixed(1)}" class="tk">${Math.round(sl)}%</text>
-<line x1="${L}" x2="${L + 18}" y1="${T + 4}" y2="${T + 4}" stroke="${C.teal}" stroke-width="2.6"/><text x="${L + 24}" y="${T + 8}" class="tk">${M.esc(county)} County</text>
-<line x1="${L + 112}" x2="${L + 130}" y1="${T + 4}" y2="${T + 4}" stroke="${C.muted}" stroke-width="2"/><text x="${L + 136}" y="${T + 8}" class="tk">State average</text>
+<circle cx="${X(y1).toFixed(1)}" cy="${Y(cl).toFixed(1)}" r="3.5" fill="${C.teal}"/><text x="${(X(y1) + 7).toFixed(1)}" y="${(clY + 4).toFixed(1)}" class="tv2" fill="${C.teal}">${Math.round(cl)}%</text>
+<circle cx="${X(y1).toFixed(1)}" cy="${Y(sl).toFixed(1)}" r="3.5" fill="${C.muted}"/><text x="${(X(y1) + 7).toFixed(1)}" y="${(slY + 4).toFixed(1)}" class="tk">${Math.round(sl)}%</text>
+<line x1="${L}" x2="${L + 18}" y1="${T + 4}" y2="${T + 4}" stroke="${C.teal}" stroke-width="2.6"/><text id="lbl1" x="${L + 24}" y="${T + 8}" class="tk">${M.esc(county)} County</text>
+<line id="lbl2line" x1="0" x2="0" y1="${T + 4}" y2="${T + 4}" stroke="${C.muted}" stroke-width="2"/><text id="lbl2" x="0" y="${T + 8}" class="tk">State average</text>
 </svg></div>`;
   }
 
@@ -146,10 +149,11 @@ ${ticks}${zero}
 
   // ---------------------------------------------------------- vulnerability
   function vulnerability(r) {
-    const col = C.tier[r.anxiety_tier] || C.muted;
-    return `<div class="panel vul"><div><h3>Economic vulnerability</h3><p>Composite economic score and local anxiety risk tier</p></div>
-<strong class="cond" style="color:${col}">${Math.round(r.vulcomposite)}</strong><span class="sub">composite score<br>0–100</span>
-<div class="tier" style="background:${col}">${M.esc(r.anxiety_tier)} anxiety risk</div></div>`;
+    const col = M.vulnColorFor(r.vulcomposite);
+    const sign = r.vulcomposite > 0 ? "+" : r.vulcomposite < 0 ? "\u2212" : "";
+    return `<div class="panel vul"><div><h3>Economic vulnerability</h3><p>Composite Economic Vulnerability Score (CEVS) and local anxiety risk tier</p></div>
+<strong class="cond" style="color:${col}">${sign}${Math.abs(r.vulcomposite).toFixed(2)}</strong><span class="sub">z-score vs<br>state average</span>
+<div class="tier" style="background:${col}">${M.esc(r.anxiety_tier)}</div></div>`;
   }
 
   // ---------------------------------------------------------- header + composition
